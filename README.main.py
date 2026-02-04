@@ -1,23 +1,21 @@
 import uuid
 import time
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from typing import List
 
-app = FastAPI()
-
-# 1. 定義接收資料的格式from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid
-import time
-from typing import List
 
-app = FastAPI()
+# ======================
+# FastAPI App
+# ======================
+app = FastAPI(title="SCN Main Node")
 
 # ======================
 # 前端靜態檔案
+# frontend/
+# └─ index.html
 # ======================
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
@@ -27,7 +25,10 @@ def root():
         with open("frontend/index.html", "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        return HTMLResponse("<h1>前端檔案不存在，請上傳 frontend/index.html</h1>")
+        return HTMLResponse(
+            "<h1>❌ 找不到 frontend/index.html</h1>"
+            "<p>請確認你有上傳前端資料夾</p>"
+        )
 
 # ======================
 # KDI Request 資料結構
@@ -40,19 +41,21 @@ class KDIRequest(BaseModel):
     memo: str = ""
 
 # ======================
-# API: 驗證訊息
+# API：驗證交易
 # ======================
 @app.post("/verify")
 def verify(req: KDIRequest):
-    # 回傳驗證結果
     return JSONResponse({
         "status": "success",
         "kdi_tx": str(uuid.uuid4()),
-        "verified_at": int(time.time())
+        "verified_at": int(time.time()),
+        "sender": req.sender,
+        "receiver": req.receiver,
+        "amount": req.amount,
     })
 
 # ======================
-# WebSocket: 心跳
+# WebSocket：輕節點心跳
 # ======================
 class ConnectionManager:
     def __init__(self):
@@ -63,7 +66,8 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
@@ -72,24 +76,32 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 @app.websocket("/ws/light")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_light(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
             data = await websocket.receive_json()
-            # 這裡可以紀錄心跳資訊或節點狀態
-            print(f"心跳來自 {data.get('node_id')} at {data.get('ts')}")
-            await websocket.send_json({"status": "ok", "ts": int(time.time())})
+            print(f"💓 心跳：{data}")
+            await websocket.send_json({
+                "status": "ok",
+                "ts": int(time.time())
+            })
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        print("輕節點斷線")
+        print("❌ 輕節點斷線")
 
 # ======================
-# 範例前端生成器提示
+# 前端提示頁
 # ======================
 @app.get("/generator", response_class=HTMLResponse)
 def generator_hint():
     return """
-    <h1>請將 frontend/ 目錄上傳到雲端主節點</h1>
-    <p>index.html + app.js + manifest.json 放在 frontend/，即可透過 / 路徑訪問前端 UI。</p>
+    <h1>SCN 前端 UI 說明</h1>
+    <p>請將以下檔案放入 frontend/ 資料夾：</p>
+    <ul>
+      <li>index.html</li>
+      <li>app.js（可選）</li>
+      <li>manifest.json（可選）</li>
+    </ul>
+    <p>完成後，直接開啟主網址即可看到 UI。</p>
     """
